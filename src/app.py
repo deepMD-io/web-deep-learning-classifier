@@ -1,6 +1,4 @@
-from fastai import *
-from fastai.vision import *
-import fastai
+
 import yaml
 import sys
 from io import BytesIO
@@ -9,8 +7,11 @@ import os
 import flask
 from flask import Flask
 import requests
-import torch
 import json
+import numpy as np
+import base64
+
+from keras.preprocessing import image
 
 with open("src/config.yaml", 'r') as stream:
     APP_CONFIG = yaml.full_load(stream)
@@ -18,9 +19,7 @@ with open("src/config.yaml", 'r') as stream:
 app = Flask(__name__)
 
 
-def load_model(path=".", model_name="model.pkl"):
-    learn = load_learner(path, fname=model_name)
-    return learn
+
 
 
 def load_image_url(url: str) -> Image:
@@ -34,21 +33,31 @@ def load_image_bytes(raw_bytes: ByteString) -> Image:
     return img
 
 
-def predict(img, n: int = 3) -> Dict[str, Union[str, List]]:
-    pred_class, pred_idx, outputs = model.predict(img)
-    pred_probs = outputs / sum(outputs)
-    pred_probs = pred_probs.tolist()
-    predictions = []
-    for image_class, output, prob in zip(model.data.classes, outputs.tolist(), pred_probs):
-        output = round(output, 1)
-        prob = round(prob, 2)
-        predictions.append(
-            {"class": image_class.replace("_", " "), "output": output, "prob": prob}
-        )
+def predict(imgg, n: int = 3) -> Dict[str, Union[str, List]]:
+    mapping = {'normal': 0, 'pneumonia': 1, 'COVID-19': 2}
+    inv_mapping = {0: 'normal', 1: 'pneumonia', 2: 'COVID-19'}
 
-    predictions = sorted(predictions, key=lambda x: x["output"], reverse=True)
-    predictions = predictions[0:n]
-    return {"class": str(pred_class), "predictions": predictions}
+    img_width, img_height = 224, 224
+
+    img = image.load_img(imgg, target_size=(img_width, img_height))
+    x = image.img_to_array(img)
+    x = np.expand_dims(x, axis=0)
+    x = x.astype('float32') / 255.0
+    data = json.dumps({"signature_name": "classification",
+                       "instances": x.tolist()})
+    headers = {"content-type": "application/json"}
+    json_response = requests.post('http://35.222.46.150:8501/v1/models/covid:predict',
+                                  data, headers=headers)
+
+    print(inv_mapping[predictions.argmax(axis=1)[0]])
+    # print(predictions[0][0], predictions[0][1], predictions[0][2])
+    predictions = numpy.array(json.loads(json_response.text)["predictions"])
+    # print('Prediction: {}'.format(inv_mapping[predictions.argmax(axis=1)[0]]))
+    print('Confidence')
+    out = 'Normal: {:.3f}, Pneumonia: {:.3f}, COVID: {:.3f}'.format(predictions[0][0]*100, predictions[0][1]*100, predictions[0][2]*100)
+    print(out)
+    #return {"class": str(pred_class), "predictions": predictions}
+    return {out}
 
 
 @app.route('/api/classify', methods=['POST', 'GET'])
@@ -63,10 +72,6 @@ def upload_file():
     return flask.jsonify(res)
 
 
-@app.route('/api/classes', methods=['GET'])
-def classes():
-    classes = sorted(model.data.classes)
-    return flask.jsonify(classes)
 
 
 @app.route('/ping', methods=['GET'])
